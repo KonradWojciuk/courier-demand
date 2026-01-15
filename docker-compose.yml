@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+
+  # Minio
+  minio:
+    image: quay.io/minio/minio:RELEASE.2023-12-23T07-19-11Z
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x minio || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-net
+
+  # Hive Metastore
+  hive-metastore:
+    build: ./hive-metastore
+    container_name: hive-metastore
+    environment:
+      SERVICE_NAME: metastore
+      HIVE_METASTORE_PORT: 9083
+      HIVE_LOGLEVEL: INFO
+      HIVE_DBTYPE: derby
+    ports:
+      - "9083:9083"
+    volumes:
+      - ./hive-metastore-data:/opt/hive-metastore
+      - ./hive-metastore/conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml
+    depends_on:
+      - minio
+    networks:
+      - app-net
+
+  # Trino
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog
+    depends_on:
+      - minio
+      - hive-metastore
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - app-net
+
+  # Converter
+  converter:
+    build: ./converter
+    container_name: converter
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      WATCH_BUCKET: datalake
+      TRINO_HOST: trino
+      TRINO_PORT: 8080
+      TRINO_USER: admin
+      TRINO_CATALOG: hive
+      TRINO_SCHEMA: default
+    depends_on:
+      - minio
+      - trino
+    volumes:
+      - ./converter:/app
+    restart: unless-stopped
+    networks:
+      - app-net
+
+  # Backend
+  backend:
+    build: ./backend
+    container_name: backend
+    ports:
+      - "3001:3001"
+    environment:
+      TRINO_HOST: trino
+      TRINO_PORT: 8080
+      TRINO_USER: admin
+    depends_on:
+      trino:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src
+    networks:
+      - app-net
+
+  # Frontend
+  frontend:
+    build: ./frontend
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules 
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge

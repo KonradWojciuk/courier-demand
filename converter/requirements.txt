@@ -1,0 +1,5 @@
+pandas==2.2.3
+pyarrow==17.0.0
+s3fs==2024.6.1
+trino==0.326.0
+watchdog==4.0.1
